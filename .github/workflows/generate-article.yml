@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   generate:
@@ -49,9 +50,9 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          mode: agent
-          max_turns: "50"
-          allowed_tools: "Read,Write,Edit,Bash,WebSearch,WebFetch"
+          claude_args: |
+            --max-turns 50
+            --allowedTools Read,Write,Edit,Bash,WebSearch,WebFetch
           prompt: |
             You are writing one SEO article for the totocola brand blog.
 
