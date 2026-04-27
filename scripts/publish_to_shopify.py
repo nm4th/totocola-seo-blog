@@ -46,7 +46,6 @@ mutation ArticleCreate($article: ArticleCreateInput!) {
       handle
       isPublished
       publishedAt
-      onlineStoreUrl
     }
     userErrors {
       field
@@ -194,14 +193,12 @@ def main(argv: list[str]) -> int:
 
     article = payload.get("article") or {}
     print(f"OK: created article id={article.get('id')} published={article.get('isPublished')}")
-    if article.get("onlineStoreUrl"):
-        print(f"  url: {article['onlineStoreUrl']}")
 
     gh_out = os.environ.get("GITHUB_OUTPUT")
     if gh_out:
         with open(gh_out, "a", encoding="utf-8") as fh:
             fh.write(f"article_id={article.get('id', '')}\n")
-            fh.write(f"article_url={article.get('onlineStoreUrl', '')}\n")
+            fh.write(f"article_url=\n")
             fh.write(f"is_published={'true' if article.get('isPublished') else 'false'}\n")
     return 0
 
