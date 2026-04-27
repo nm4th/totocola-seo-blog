@@ -240,11 +240,35 @@ def main(argv: list[str]) -> int:
 
     article_input = {k: v for k, v in article_input.items() if v not in (None, "")}
 
-    print(
-        f"Posting to Shopify: title={meta['title']!r} "
-        f"handle={meta.get('handle')!r} auto_publish={auto_publish}"
-    )
-    result = post_graphql(domain, token, ARTICLE_CREATE, {"article": article_input})
+    base_handle = meta.get("handle") or ""
+    max_attempts = 5
+    result: dict = {}
+    chosen_handle = base_handle
+    for attempt in range(max_attempts):
+        chosen_handle = base_handle if attempt == 0 else f"{base_handle}-{attempt + 1}"
+        article_input["handle"] = chosen_handle
+        print(
+            f"Posting to Shopify: title={meta['title']!r} "
+            f"handle={chosen_handle!r} auto_publish={auto_publish}"
+        )
+        result = post_graphql(domain, token, ARTICLE_CREATE, {"article": article_input})
+
+        if result.get("errors"):
+            break
+
+        payload = result.get("data", {}).get("articleCreate", {})
+        user_errors = payload.get("userErrors") or []
+        handle_conflict = any(
+            "handle" in (e.get("field") or [])
+            and "already been taken" in (e.get("message") or "").lower()
+            for e in user_errors
+        )
+        if not handle_conflict:
+            break
+        print(
+            f"  handle {chosen_handle!r} already taken, retrying with next suffix...",
+            file=sys.stderr,
+        )
 
     out_path = md_path.with_suffix(".publish.json")
     out_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
