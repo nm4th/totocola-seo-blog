@@ -159,13 +159,29 @@ def main(argv: list[str]) -> int:
         "tags": meta.get("tags", []),
         "isPublished": auto_publish,
     }
-    seo: dict = {}
+    # Shopify stores SEO title/description as metafields under the global
+    # namespace; ArticleCreateInput has no `seo` field.
+    metafields: list[dict] = []
     if meta.get("seo_title"):
-        seo["title"] = meta["seo_title"]
+        metafields.append(
+            {
+                "namespace": "global",
+                "key": "title_tag",
+                "value": meta["seo_title"],
+                "type": "single_line_text_field",
+            }
+        )
     if meta.get("seo_description"):
-        seo["description"] = meta["seo_description"]
-    if seo:
-        article_input["seo"] = seo
+        metafields.append(
+            {
+                "namespace": "global",
+                "key": "description_tag",
+                "value": meta["seo_description"],
+                "type": "multi_line_text_field",
+            }
+        )
+    if metafields:
+        article_input["metafields"] = metafields
 
     article_input = {k: v for k, v in article_input.items() if v not in (None, "")}
 
