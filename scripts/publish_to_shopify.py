@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -119,21 +120,73 @@ def verify_blog_id(domain: str, token: str, blog_id: str) -> None:
     sys.exit(6)
 
 
+PRODUCT_URL_PREFIX = "https://totocola.com/products/"
+
+ARTICLE_CONTAINER_STYLE = (
+    "max-width:680px;margin:0 auto;line-height:1.95;font-size:16px;"
+    "color:#1a1a1a;letter-spacing:0.02em;"
+)
+
+CTA_WRAPPER_STYLE = (
+    "margin:3em auto;padding:2em 1.5em;background:#f6f3ee;"
+    "border-radius:8px;text-align:center;"
+)
+
+CTA_BUTTON_STYLE = (
+    "display:inline-block;padding:14px 36px;background:#1a1a1a;color:#fff;"
+    "text-decoration:none;border-radius:4px;font-size:0.95em;"
+    "letter-spacing:0.08em;"
+)
+
+
+def _style_final_product_cta(html: str) -> str:
+    """Replace the last <p> containing a product link with a styled CTA box."""
+    pattern = re.compile(
+        r"<p>(?:(?!</p>).)*?"
+        r'<a\s+href="(' + re.escape(PRODUCT_URL_PREFIX) + r'[^"]*)"[^>]*>'
+        r"([^<]+)"
+        r"</a>"
+        r"(?:(?!</p>).)*?</p>",
+        re.DOTALL,
+    )
+    matches = list(pattern.finditer(html))
+    if not matches:
+        return html
+    last = matches[-1]
+    url, text = last.group(1), last.group(2)
+    cta = (
+        f'<div style="{CTA_WRAPPER_STYLE}">'
+        f'<a href="{url}" style="{CTA_BUTTON_STYLE}">{text} →</a>'
+        f"</div>"
+    )
+    return html[: last.start()] + cta + html[last.end() :]
+
+
 def md_to_html(md_text: str) -> str:
     """Convert article markdown to HTML; drop a leading H1.
 
     The article title is set on the Article record itself (via the title
     field on ArticleCreateInput), so the first-line H1 inside the markdown
-    body is duplicated content and is removed before conversion.
+    body is duplicated content and is removed before conversion. The final
+    paragraph that points at the product page is rewritten as a styled CTA
+    box; the inline mid-article product mention stays as a regular link.
+    The whole body is wrapped in a width-constrained container with a
+    line-height tuned for long-form Japanese reading.
     """
     text = md_text.lstrip()
     if text.startswith("# "):
         _, _, rest = text.partition("\n")
         text = rest.lstrip("\n")
-    return markdown.markdown(
+    raw_html = markdown.markdown(
         text,
         extensions=["extra", "sane_lists", "smarty"],
         output_format="html5",
+    )
+    styled = _style_final_product_cta(raw_html)
+    return (
+        f'<div class="totocola-article" style="{ARTICLE_CONTAINER_STYLE}">\n'
+        f"{styled}\n"
+        "</div>"
     )
 
 
