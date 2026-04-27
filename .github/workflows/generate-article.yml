@@ -118,12 +118,18 @@ jobs:
 
       - name: Commit CSV update
         if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if git diff --quiet -- data/keywords.csv; then
             echo "No CSV changes to commit"
           else
+            # claude-code-action revokes the installation token it injected,
+            # so reset the remote URL with the workflow's GITHUB_TOKEN before
+            # pushing.
+            git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
             git add data/keywords.csv
             git commit -m "chore: update keyword status (id=${{ steps.pick.outputs.keyword_id }})"
             git push
