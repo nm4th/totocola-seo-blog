@@ -1,0 +1,137 @@
+name: Generate SEO Article
+
+on:
+  workflow_dispatch:
+    inputs:
+      auto_publish:
+        description: "Publish immediately (true) or save as draft (false)"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+  # Optional schedule — uncomment to run weekly on Tuesdays 03:00 UTC (12:00 JST)
+  # schedule:
+  #   - cron: "0 3 * * 2"
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    concurrency:
+      group: generate-article
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Pick next keyword
+        id: pick
+        run: python scripts/pick_keyword.py
+
+      - name: Mark keyword in_progress
+        run: |
+          python scripts/update_keyword_status.py "${{ steps.pick.outputs.keyword_id }}" in_progress
+
+      - name: Generate article with Claude Code
+        id: generate
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          mode: agent
+          max_turns: "50"
+          allowed_tools: "Read,Write,Edit,Bash,WebSearch,WebFetch"
+          prompt: |
+            You are writing one SEO article for the totocola brand blog.
+
+            Inputs:
+              KEYWORD = ${{ steps.pick.outputs.keyword }}
+              SEARCH_INTENT = ${{ steps.pick.outputs.search_intent }}
+              PRIORITY = ${{ steps.pick.outputs.priority }}
+              NOTES = ${{ steps.pick.outputs.notes }}
+
+            Read CLAUDE.md and prompts/article_generation.md, then follow them
+            exactly to produce one article. Write to:
+              output/<handle>.md
+              output/<handle>.meta.json
+            where <handle> matches the handle field inside the meta json.
+            Create the output/ directory if it does not exist. Do not write any
+            other files. When done, print the path of the .md file as the last
+            line of your response.
+
+      - name: Locate generated article
+        id: locate
+        run: |
+          set -e
+          MD_PATH="$(ls output/*.md 2>/dev/null | head -n1 || true)"
+          if [ -z "$MD_PATH" ]; then
+            echo "ERROR: no markdown file found in output/" >&2
+            exit 1
+          fi
+          META_PATH="${MD_PATH%.md}.meta.json"
+          if [ ! -f "$META_PATH" ]; then
+            echo "ERROR: meta.json not found at $META_PATH" >&2
+            exit 1
+          fi
+          echo "md_path=$MD_PATH" >> "$GITHUB_OUTPUT"
+          echo "meta_path=$META_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Compliance check
+        run: python scripts/check_compliance.py "${{ steps.locate.outputs.md_path }}"
+
+      - name: Publish to Shopify
+        id: publish
+        env:
+          SHOPIFY_STORE_DOMAIN: ${{ secrets.SHOPIFY_STORE_DOMAIN }}
+          SHOPIFY_ACCESS_TOKEN: ${{ secrets.SHOPIFY_ACCESS_TOKEN }}
+          SHOPIFY_BLOG_ID: ${{ secrets.SHOPIFY_BLOG_ID }}
+          AUTO_PUBLISH: ${{ inputs.auto_publish }}
+        run: python scripts/publish_to_shopify.py "${{ steps.locate.outputs.md_path }}"
+
+      - name: Mark keyword published
+        if: success()
+        run: |
+          python scripts/update_keyword_status.py \
+            "${{ steps.pick.outputs.keyword_id }}" \
+            published \
+            --url "${{ steps.publish.outputs.article_url }}"
+
+      - name: Mark keyword failed (reset to pending)
+        if: failure()
+        run: |
+          python scripts/update_keyword_status.py \
+            "${{ steps.pick.outputs.keyword_id }}" \
+            failed || true
+
+      - name: Commit CSV update
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- data/keywords.csv; then
+            echo "No CSV changes to commit"
+          else
+            git add data/keywords.csv
+            git commit -m "chore: update keyword status (id=${{ steps.pick.outputs.keyword_id }})"
+            git push
+          fi
+
+      - name: Upload generated article as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: article-${{ steps.pick.outputs.keyword_id }}
+          path: output/
+          if-no-files-found: ignore
+          retention-days: 14
