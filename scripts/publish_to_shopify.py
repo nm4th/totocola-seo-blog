@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 """Publish a generated article to Shopify via Admin GraphQL articleCreate.
 
+Auth: Dev Dashboard apps use the OAuth client credentials grant. We exchange
+SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET for a 24h access token at
+https://{shop}.myshopify.com/admin/oauth/access_token, then call the Admin API
+with that token. Requires the app and store to live in the same Shopify org.
+
 Required env vars:
-    SHOPIFY_STORE_DOMAIN   e.g. totocola.myshopify.com
-    SHOPIFY_ACCESS_TOKEN   shpat_...
+    SHOPIFY_STORE_DOMAIN   e.g. totonoido.myshopify.com
+    SHOPIFY_CLIENT_ID      Dev Dashboard → Settings → Credentials → Client ID
+    SHOPIFY_CLIENT_SECRET  Dev Dashboard → Settings → Credentials → Secret (shpss_...)
     SHOPIFY_BLOG_ID        gid://shopify/Blog/xxxxxxxxx
     AUTO_PUBLISH           "true" to publish immediately, otherwise saved as draft
 
@@ -59,6 +65,40 @@ def env(name: str) -> str:
     return v
 
 
+def fetch_access_token(domain: str, client_id: str, client_secret: str) -> str:
+    """Exchange client_id + client_secret for a 24h Admin API access token."""
+    url = f"https://{domain}/admin/oauth/access_token"
+    body = json.dumps(
+        {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "grant_type": "client_credentials",
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        msg = e.read().decode("utf-8", errors="replace")
+        print(f"ERROR: HTTP {e.code} from token endpoint\n{msg}", file=sys.stderr)
+        sys.exit(3)
+    except urllib.error.URLError as e:
+        print(f"ERROR: network error talking to token endpoint: {e}", file=sys.stderr)
+        sys.exit(3)
+
+    token = payload.get("access_token")
+    if not token:
+        print(f"ERROR: token endpoint returned no access_token: {payload}", file=sys.stderr)
+        sys.exit(3)
+    return token
+
+
 def post_graphql(domain: str, token: str, query: str, variables: dict) -> dict:
     url = f"https://{domain}/admin/api/{API_VERSION}/graphql.json"
     body = json.dumps({"query": query, "variables": variables}).encode("utf-8")
@@ -102,9 +142,13 @@ def main(argv: list[str]) -> int:
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
 
     domain = env("SHOPIFY_STORE_DOMAIN")
-    token = env("SHOPIFY_ACCESS_TOKEN")
+    client_id = env("SHOPIFY_CLIENT_ID")
+    client_secret = env("SHOPIFY_CLIENT_SECRET")
     blog_id = env("SHOPIFY_BLOG_ID")
     auto_publish = os.environ.get("AUTO_PUBLISH", "false").strip().lower() == "true"
+
+    print(f"Exchanging client credentials for access token at {domain}...")
+    token = fetch_access_token(domain, client_id, client_secret)
 
     article_input: dict = {
         "blogId": blog_id,
