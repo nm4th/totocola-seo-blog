@@ -37,6 +37,20 @@ import urllib.request
 
 API_VERSION = "2026-01"
 
+LIST_BLOGS = """
+{
+  blogs(first: 50) {
+    edges {
+      node {
+        id
+        title
+        handle
+      }
+    }
+  }
+}
+""".strip()
+
 ARTICLE_CREATE = """
 mutation ArticleCreate($article: ArticleCreateInput!) {
   articleCreate(article: $article) {
@@ -62,6 +76,45 @@ def env(name: str) -> str:
         print(f"ERROR: env var {name} is not set", file=sys.stderr)
         sys.exit(2)
     return v
+
+
+def normalize_blog_id(raw: str) -> str:
+    """Accept either a full gid or a bare numeric ID and return a gid."""
+    cleaned = raw.strip().strip('"').strip("'")
+    if cleaned.startswith("gid://shopify/Blog/"):
+        return cleaned
+    if cleaned.isdigit():
+        return f"gid://shopify/Blog/{cleaned}"
+    # Anything else is malformed — let the caller decide whether to error.
+    return cleaned
+
+
+def verify_blog_id(domain: str, token: str, blog_id: str) -> None:
+    """Ensure SHOPIFY_BLOG_ID exists; on miss, list all blogs and exit."""
+    result = post_graphql(domain, token, LIST_BLOGS, {})
+    edges = (result.get("data", {}).get("blogs") or {}).get("edges") or []
+    blogs = [e["node"] for e in edges]
+    if any(b["id"] == blog_id for b in blogs):
+        match = next(b for b in blogs if b["id"] == blog_id)
+        print(f"Blog OK: {blog_id}  (title={match['title']!r}, handle={match['handle']!r})")
+        return
+
+    print(
+        f"ERROR: SHOPIFY_BLOG_ID does not match any blog on this store.\n"
+        f"  configured: {blog_id!r}\n"
+        f"  available blogs ({len(blogs)}):",
+        file=sys.stderr,
+    )
+    for b in blogs:
+        print(
+            f"    - id={b['id']}  handle={b['handle']!r}  title={b['title']!r}",
+            file=sys.stderr,
+        )
+    print(
+        "\nUpdate the SHOPIFY_BLOG_ID GitHub Secret to one of the gid values above.",
+        file=sys.stderr,
+    )
+    sys.exit(6)
 
 
 def fetch_access_token(domain: str, client_id: str, client_secret: str) -> str:
@@ -143,11 +196,13 @@ def main(argv: list[str]) -> int:
     domain = env("SHOPIFY_STORE_DOMAIN")
     client_id = env("SHOPIFY_CLIENT_ID")
     client_secret = env("SHOPIFY_CLIENT_SECRET")
-    blog_id = env("SHOPIFY_BLOG_ID")
+    blog_id = normalize_blog_id(env("SHOPIFY_BLOG_ID"))
     auto_publish = os.environ.get("AUTO_PUBLISH", "false").strip().lower() == "true"
 
     print(f"Exchanging client credentials for access token at {domain}...")
     token = fetch_access_token(domain, client_id, client_secret)
+
+    verify_blog_id(domain, token, blog_id)
 
     article_input: dict = {
         "blogId": blog_id,
