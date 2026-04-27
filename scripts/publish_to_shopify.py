@@ -35,6 +35,8 @@ from pathlib import Path
 import urllib.error
 import urllib.request
 
+import markdown
+
 API_VERSION = "2026-01"
 
 LIST_BLOGS = """
@@ -115,6 +117,24 @@ def verify_blog_id(domain: str, token: str, blog_id: str) -> None:
         file=sys.stderr,
     )
     sys.exit(6)
+
+
+def md_to_html(md_text: str) -> str:
+    """Convert article markdown to HTML; drop a leading H1.
+
+    The article title is set on the Article record itself (via the title
+    field on ArticleCreateInput), so the first-line H1 inside the markdown
+    body is duplicated content and is removed before conversion.
+    """
+    text = md_text.lstrip()
+    if text.startswith("# "):
+        _, _, rest = text.partition("\n")
+        text = rest.lstrip("\n")
+    return markdown.markdown(
+        text,
+        extensions=["extra", "sane_lists", "smarty"],
+        output_format="html5",
+    )
 
 
 def fetch_access_token(domain: str, client_id: str, client_secret: str) -> str:
@@ -204,11 +224,13 @@ def main(argv: list[str]) -> int:
 
     verify_blog_id(domain, token, blog_id)
 
+    body_html = md_to_html(body_md)
+
     article_input: dict = {
         "blogId": blog_id,
         "title": meta["title"],
         "handle": meta.get("handle"),
-        "body": body_md,
+        "body": body_html,
         "summary": meta.get("summary", ""),
         "author": {"name": meta.get("author", "ととコーラ編集部")},
         "tags": meta.get("tags", []),
